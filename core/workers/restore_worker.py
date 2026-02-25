@@ -11,10 +11,11 @@ class RestoreSignals(QObject):
 
 
 class RestoreWorker(QRunnable):
-    def __init__(self, server, backup_path):
+    def __init__(self, server, backup_path, target_db):
         super().__init__()
         self.server = server
         self.backup_path = backup_path
+        self.target_db = target_db  # <-- store target DB
         self.signals = RestoreSignals()
         self.process = None
         self._cancelled = False
@@ -30,14 +31,25 @@ class RestoreWorker(QRunnable):
             process_env.insert(k, v)
         self.process.setProcessEnvironment(process_env)
 
-        args = [
-            "-h", self.server["host"],
-            "-p", str(self.server["port"]),
-            "-U", self.server["user"],
-            "-d", "postgres",
-            self.backup_path
-        ]
-
+        # If target_db is None → auto-create original DB from backup
+        if self.target_db:
+            args = [
+                "-h", self.server["host"],
+                "-p", str(self.server["port"]),
+                "-U", self.server["user"],
+                "-d", self.target_db,
+                "-c",  # optional: clean tables before restore
+                self.backup_path
+            ]
+        else:
+            args = [
+                "-h", self.server["host"],
+                "-p", str(self.server["port"]),
+                "-U", self.server["user"],
+                "-C",              # create original DB
+                "-d", "postgres",  # connect to default DB for creation
+                self.backup_path
+            ]
         self.process.start("pg_restore", args)
         self.process.waitForFinished(-1)
 

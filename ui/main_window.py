@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from PySide6.QtCore import QThreadPool
 from core.workers.backup_worker import BackupWorker
 from core.workers.restore_worker import RestoreWorker
+import os
 
 
 class MainWindow(QMainWindow):
@@ -200,22 +201,38 @@ class MainWindow(QMainWindow):
             return
 
         files, _ = QFileDialog.getOpenFileNames(
-            self, "Select Backup Folders", ""
+            self, "Select Backup Files", "", "Backup Files (*.backup)"
         )
 
         if not files:
             return
 
-        for path in files:
-            worker = RestoreWorker(self.current_server, path)
+        # Determine which DB(s) the user wants to restore into
+        selected_dbs = [
+            self.db_list.item(i).text()
+            for i in range(self.db_list.count())
+            if self.db_list.item(i).checkState() == Qt.Checked
+        ]
 
-            worker.signals.finished.connect(
-                lambda p: QMessageBox.information(self, "Restore Done", f"{p} restored.")
-            )
+        self.active_workers.clear()
 
-            worker.signals.error.connect(
-                lambda p, err: QMessageBox.warning(self, "Error", f"{p}: {err}")
-            )
+        # Helper function to connect signals safely
+        def connect_worker_signals(worker, db_name):
+            worker.signals.progress.connect(lambda db, val: print(f"{db} progress: {val}%"))
+            worker.signals.finished.connect(lambda db: QMessageBox.information(self, "Restore Done", f"{db_name} restored."))
+            worker.signals.error.connect(lambda db, err: QMessageBox.warning(self, "Restore Error", f"{db_name}: {err}"))
 
+        # Case 1: 1 file + 1 selected DB → restore into selected DB
+        if len(files) == 1 and len(selected_dbs) == 1:
+            worker = RestoreWorker(self.current_server, files[0], selected_dbs[0])
+            connect_worker_signals(worker, selected_dbs[0])
             self.threadpool.start(worker)
             self.active_workers.append(worker)
+
+        # Case 2: Multiple files OR no specific DB → restore using original DB from backup
+        else:
+            for file in files:
+                worker = RestoreWorker(self.current_server, file, None)  # target_db=None triggers auto-create
+                connect_worker_signals(worker, os.path.basename(file))
+                self.threadpool.start(worker)
+                self.active_workers.append(worker)

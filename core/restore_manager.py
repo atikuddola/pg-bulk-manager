@@ -45,7 +45,8 @@ class RestoreManager:
             "-h", server["host"],
             "-p", str(server["port"]),
             "-U", server["user"],
-            "-d", target_db,
+            "-d", target_db,  # connect to the database you want
+            "-c",             # optional: clean tables before restoring
             backup_file
         ]
 

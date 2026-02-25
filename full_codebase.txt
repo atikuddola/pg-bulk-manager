@@ -22,8 +22,6 @@ class BackupWorker(QRunnable):
         self._cancelled = False
 
     def run(self):
-        output_path = os.path.join(self.output_folder, self.dbname)
-
         self.process = QProcess()
 
         env = os.environ.copy()
@@ -34,16 +32,16 @@ class BackupWorker(QRunnable):
             process_env.insert(k, v)
         self.process.setProcessEnvironment(process_env)
 
+        output_file = os.path.join(self.output_folder, f"{self.dbname}.backup")
+
         args = [
             "-h", self.server["host"],
             "-p", str(self.server["port"]),
             "-U", self.server["user"],
-            "-F", "d",          # directory format
-            "-j", "4",          # parallel jobs
+            "-F", "c",           # custom format = single .backup file
             "-d", self.dbname,
-            "-f", output_path
+            "-f", output_file
         ]
-
         self.process.start("pg_dump", args)
         self.process.waitForFinished(-1)
 
@@ -75,10 +73,11 @@ class RestoreSignals(QObject):
 
 
 class RestoreWorker(QRunnable):
-    def __init__(self, server, backup_path):
+    def __init__(self, server, backup_path, target_db):
         super().__init__()
         self.server = server
         self.backup_path = backup_path
+        self.target_db = target_db  # <-- store target DB
         self.signals = RestoreSignals()
         self.process = None
         self._cancelled = False
@@ -94,14 +93,25 @@ class RestoreWorker(QRunnable):
             process_env.insert(k, v)
         self.process.setProcessEnvironment(process_env)
 
-        args = [
-            "-h", self.server["host"],
-            "-p", str(self.server["port"]),
-            "-U", self.server["user"],
-            "-d", "postgres",
-            self.backup_path
-        ]
-
+        # If target_db is None → auto-create original DB from backup
+        if self.target_db:
+            args = [
+                "-h", self.server["host"],
+                "-p", str(self.server["port"]),
+                "-U", self.server["user"],
+                "-d", self.target_db,
+                "-c",  # optional: clean tables before restore
+                self.backup_path
+            ]
+        else:
+            args = [
+                "-h", self.server["host"],
+                "-p", str(self.server["port"]),
+                "-U", self.server["user"],
+                "-C",              # create original DB
+                "-d", "postgres",  # connect to default DB for creation
+                self.backup_path
+            ]
         self.process.start("pg_restore", args)
         self.process.waitForFinished(-1)
 
@@ -167,7 +177,8 @@ class RestoreManager:
             "-h", server["host"],
             "-p", str(server["port"]),
             "-U", server["user"],
-            "-d", target_db,
+            "-d", target_db,  # connect to the database you want
+            "-c",             # optional: clean tables before restoring
             backup_file
         ]
 
@@ -463,7 +474,25 @@ class MainWindow(QMainWindow):
             return
 
         for path in files:
-            worker = RestoreWorker(self.current_server, path)
+            # Determine which DB the user wants to restore into
+            selected_dbs = [
+                self.db_list.item(i).text()
+                for i in range(self.db_list.count())
+                if self.db_list.item(i).checkState() == Qt.Checked
+            ]
+
+            # 1 file + 1 selected DB → restore into that database
+            if len(selected_dbs) == 1 and len(files) == 1:
+                worker = RestoreWorker(self.current_server, files[0], selected_dbs[0])
+                self.threadpool.start(worker)
+                self.active_workers.append(worker)
+
+            # Otherwise → auto-create DB from backup (original name)
+            else:
+                for file in files:
+                    worker = RestoreWorker(self.current_server, file, None)  # target_db=None triggers auto-create
+                    self.threadpool.start(worker)
+                    self.active_workers.append(worker)
 
             worker.signals.finished.connect(
                 lambda p: QMessageBox.information(self, "Restore Done", f"{p} restored.")
