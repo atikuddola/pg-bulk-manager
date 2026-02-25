@@ -43,3 +43,31 @@ class ServerManager:
         conn.close()
 
         return dbs
+
+    # inside ServerManager class
+
+    @staticmethod
+    def get_tables(server, db_name):
+        import psycopg2
+
+        conn = psycopg2.connect(
+            host=server["host"],
+            port=server["port"],
+            user=server["user"],
+            password=server["password"],
+            dbname=db_name
+        )
+
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+            ORDER BY table_name;
+        """)
+
+        tables = [row[0] for row in cur.fetchall()]
+
+        cur.close()
+        conn.close()
+        return tables
