@@ -1,6 +1,8 @@
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QListWidget, QFileDialog, QInputDialog, QMessageBox, QCheckBox, QListWidgetItem, QSizePolicy
+    QPushButton, QListWidget, QFileDialog,
+    QMessageBox, QCheckBox, QListWidgetItem,
+    QSizePolicy, QInputDialog
 )
 from PySide6.QtCore import Qt
 from core.server_manager import ServerManager
@@ -13,7 +15,7 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("Postgres Bulk Manager")
-        self.setMinimumSize(700, 400)
+        self.setMinimumSize(900, 500)
 
         self.servers = ServerManager.load_servers()
         self.current_server = None
@@ -25,7 +27,7 @@ class MainWindow(QMainWindow):
         main_layout = QHBoxLayout()
 
         # -----------------------------
-        # Left side: Select All + database list
+        # Left Side
         # -----------------------------
         left_layout = QVBoxLayout()
 
@@ -40,20 +42,28 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.db_list)
 
         # -----------------------------
-        # Right side: buttons
+        # Right Side Buttons
         # -----------------------------
         btn_layout = QVBoxLayout()
-        self.connect_btn = QPushButton("Connect Server")
+
+        top_btn_layout = QHBoxLayout()
+
+        self.connect_btn = QPushButton("Connect")
+        self.refresh_btn = QPushButton("Refresh")
+
+        top_btn_layout.addWidget(self.connect_btn)
+        top_btn_layout.addWidget(self.refresh_btn)
+
         self.backup_btn = QPushButton("Backup Selected")
         self.restore_btn = QPushButton("Restore Backups")
 
-        btn_layout.addWidget(self.connect_btn)
+        btn_layout.addLayout(top_btn_layout)
         btn_layout.addWidget(self.backup_btn)
         btn_layout.addWidget(self.restore_btn)
-        btn_layout.addStretch()  # push buttons to top
+        btn_layout.addStretch()
 
         # -----------------------------
-        # Combine layouts
+        # Combine Layouts
         # -----------------------------
         main_layout.addLayout(left_layout, stretch=2)
         main_layout.addLayout(btn_layout, stretch=1)
@@ -62,29 +72,31 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(main_widget)
 
         # -----------------------------
-        # Connect signals
+        # Connect Signals
         # -----------------------------
         self.connect_btn.clicked.connect(self.connect_server)
+        self.refresh_btn.clicked.connect(self.refresh_databases)
         self.backup_btn.clicked.connect(self.backup_selected)
         self.restore_btn.clicked.connect(self.restore_backups)
 
-    # -----------------------------
-    # Select All functionality
-    # -----------------------------
+    # ---------------------------------
+    # Select All
+    # ---------------------------------
     def toggle_select_all(self, state):
         for i in range(self.db_list.count()):
             item = self.db_list.item(i)
             item.setCheckState(Qt.Checked if state == Qt.Checked else Qt.Unchecked)
 
-    # -----------------------------
-    # Server connection
-    # -----------------------------
+    # ---------------------------------
+    # Connect to Server (Select Only)
+    # ---------------------------------
     def connect_server(self):
         if not self.servers:
             QMessageBox.warning(self, "Error", "No servers configured.")
             return
 
         server_names = [s["name"] for s in self.servers]
+
         server_name, ok = QInputDialog.getItem(
             self, "Select Server", "Server:", server_names, 0, False
         )
@@ -96,6 +108,22 @@ class MainWindow(QMainWindow):
             s for s in self.servers if s["name"] == server_name
         )
 
+        self.load_databases()
+
+    # ---------------------------------
+    # Refresh Databases
+    # ---------------------------------
+    def refresh_databases(self):
+        if not self.current_server:
+            QMessageBox.warning(self, "Error", "Connect to a server first.")
+            return
+
+        self.load_databases()
+
+    # ---------------------------------
+    # Load Databases
+    # ---------------------------------
+    def load_databases(self):
         try:
             dbs = ServerManager.get_databases(self.current_server)
         except Exception as e:
@@ -103,6 +131,7 @@ class MainWindow(QMainWindow):
             return
 
         self.db_list.clear()
+
         for db in dbs:
             item = QListWidgetItem(db)
             item.setCheckState(Qt.Unchecked)
@@ -110,16 +139,19 @@ class MainWindow(QMainWindow):
 
         self.select_all_cb.setChecked(False)
 
-    # -----------------------------
-    # Backup selected databases
-    # -----------------------------
+    # ---------------------------------
+    # Backup
+    # ---------------------------------
     def backup_selected(self):
         if not self.current_server:
             QMessageBox.warning(self, "Error", "Connect to server first.")
             return
 
-        selected = [self.db_list.item(i).text() for i in range(self.db_list.count())
-                    if self.db_list.item(i).checkState() == Qt.Checked]
+        selected = [
+            self.db_list.item(i).text()
+            for i in range(self.db_list.count())
+            if self.db_list.item(i).checkState() == Qt.Checked
+        ]
 
         if not selected:
             QMessageBox.information(self, "No Selection", "No databases selected.")
@@ -127,9 +159,10 @@ class MainWindow(QMainWindow):
 
         folder = QFileDialog.getExistingDirectory(self, "Select Backup Folder")
         if not folder:
-            return  # user canceled
+            return
 
         errors = []
+
         for db in selected:
             try:
                 BackupManager.backup_database(self.current_server, db, folder)
@@ -141,9 +174,9 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.information(self, "Backup Completed", "All selected databases backed up successfully.")
 
-    # -----------------------------
-    # Restore backup files
-    # -----------------------------
+    # ---------------------------------
+    # Restore
+    # ---------------------------------
     def restore_backups(self):
         if not self.current_server:
             QMessageBox.warning(self, "Error", "Connect to target server first.")
@@ -152,10 +185,12 @@ class MainWindow(QMainWindow):
         files, _ = QFileDialog.getOpenFileNames(
             self, "Select Backup Files", "", "Backup Files (*.backup)"
         )
+
         if not files:
-            return  # user canceled
+            return
 
         errors = []
+
         for file in files:
             try:
                 RestoreManager.restore_backup(self.current_server, file)
