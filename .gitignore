@@ -1,1 +1,3 @@
 .pgbulkmanager/
+__pycache__/
+*.pyc

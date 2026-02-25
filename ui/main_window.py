@@ -8,11 +8,19 @@ from PySide6.QtCore import Qt
 from core.server_manager import ServerManager
 from core.backup_manager import BackupManager
 from core.restore_manager import RestoreManager
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from PySide6.QtCore import QThreadPool
+from core.workers.backup_worker import BackupWorker
+from core.workers.restore_worker import RestoreWorker
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+
+        self.threadpool = QThreadPool()
+        self.threadpool.setMaxThreadCount(3)
+        self.active_workers = []
 
         self.setWindowTitle("Postgres Bulk Manager")
         self.setMinimumSize(900, 500)
@@ -41,6 +49,7 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.select_all_cb)
         left_layout.addWidget(self.db_list)
 
+
         # -----------------------------
         # Right Side Buttons
         # -----------------------------
@@ -56,10 +65,12 @@ class MainWindow(QMainWindow):
 
         self.backup_btn = QPushButton("Backup Selected")
         self.restore_btn = QPushButton("Restore Backups")
+        self.cancel_btn = QPushButton("Cancel All")
 
         btn_layout.addLayout(top_btn_layout)
         btn_layout.addWidget(self.backup_btn)
         btn_layout.addWidget(self.restore_btn)
+        btn_layout.addWidget(self.cancel_btn)
         btn_layout.addStretch()
 
         # -----------------------------
@@ -78,6 +89,7 @@ class MainWindow(QMainWindow):
         self.refresh_btn.clicked.connect(self.refresh_databases)
         self.backup_btn.clicked.connect(self.backup_selected)
         self.restore_btn.clicked.connect(self.restore_backups)
+        self.cancel_btn.clicked.connect(self.cancel_all)
 
     # ---------------------------------
     # Select All
@@ -86,6 +98,13 @@ class MainWindow(QMainWindow):
         for i in range(self.db_list.count()):
             item = self.db_list.item(i)
             item.setCheckState(Qt.Checked if state == Qt.Checked else Qt.Unchecked)
+
+
+    def cancel_all(self):
+        for worker in self.active_workers:
+            worker.cancel()
+        self.active_workers.clear()
+
 
     # ---------------------------------
     # Connect to Server (Select Only)
@@ -144,80 +163,59 @@ class MainWindow(QMainWindow):
     # ---------------------------------
     def backup_selected(self):
         if not self.current_server:
-            QMessageBox.warning(self, "Error", "Connect to server first.")
-            return
-
-        selected = [
-            self.db_list.item(i).text()
-            for i in range(self.db_list.count())
-            if self.db_list.item(i).checkState() == Qt.Checked
-        ]
-
-        if not selected:
-            QMessageBox.information(self, "No Selection", "No databases selected.")
+            QMessageBox.warning(self, "Error", "Connect first.")
             return
 
         folder = QFileDialog.getExistingDirectory(self, "Select Backup Folder")
         if not folder:
             return
 
-        errors = []
+        for i in range(self.db_list.count()):
+            item = self.db_list.item(i)
 
-        for db in selected:
-            try:
-                BackupManager.backup_database(self.current_server, db, folder)
-            except Exception as e:
-                errors.append(f"{db}: {str(e)}")
+            if item.checkState() == Qt.Checked:
+                dbname = item.text()
 
-        if errors:
-            QMessageBox.warning(self, "Backup Completed With Errors", "\n".join(errors))
-        else:
-            QMessageBox.information(self, "Backup Completed", "All selected databases backed up successfully.")
+                worker = BackupWorker(self.current_server, dbname, folder)
+
+                worker.signals.progress.connect(
+                    lambda db, val, it=item: it.setText(f"{db} ({val}%)")
+                )
+
+                worker.signals.finished.connect(
+                    lambda db: QMessageBox.information(self, "Done", f"{db} backup finished.")
+                )
+
+                worker.signals.error.connect(
+                    lambda db, err: QMessageBox.warning(self, "Error", f"{db}: {err}")
+                )
+
+                self.threadpool.start(worker)
+                self.active_workers.append(worker)
+
 
     def restore_backups(self):
         if not self.current_server:
-            QMessageBox.warning(self, "Error", "Connect to target server first.")
+            QMessageBox.warning(self, "Error", "Connect first.")
             return
 
         files, _ = QFileDialog.getOpenFileNames(
-            self, "Select Backup Files", "", "Backup Files (*.backup)"
+            self, "Select Backup Folders", ""
         )
 
         if not files:
             return
 
-        # Get selected databases
-        selected_dbs = [
-            self.db_list.item(i).text()
-            for i in range(self.db_list.count())
-            if self.db_list.item(i).checkState() == Qt.Checked
-        ]
+        for path in files:
+            worker = RestoreWorker(self.current_server, path)
 
-        errors = []
+            worker.signals.finished.connect(
+                lambda p: QMessageBox.information(self, "Restore Done", f"{p} restored.")
+            )
 
-        # 1 file + 1 DB → restore into selected DB
-        if len(files) == 1 and len(selected_dbs) == 1:
-            try:
-                RestoreManager.restore_into_existing_db(
-                    self.current_server,
-                    files[0],
-                    selected_dbs[0]
-                )
-            except Exception as e:
-                errors.append(str(e))
+            worker.signals.error.connect(
+                lambda p, err: QMessageBox.warning(self, "Error", f"{p}: {err}")
+            )
 
-        # Otherwise → auto create DB
-        else:
-            for file in files:
-                try:
-                    RestoreManager.restore_backup(
-                        self.current_server,
-                        file
-                    )
-                except Exception as e:
-                    errors.append(f"{file}: {str(e)}")
-
-        if errors:
-            QMessageBox.warning(self, "Restore Completed With Errors", "\n".join(errors))
-        else:
-            QMessageBox.information(self, "Restore Completed", "Restore finished successfully.")
+            self.threadpool.start(worker)
+            self.active_workers.append(worker)
