@@ -174,9 +174,6 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.information(self, "Backup Completed", "All selected databases backed up successfully.")
 
-    # ---------------------------------
-    # Restore
-    # ---------------------------------
     def restore_backups(self):
         if not self.current_server:
             QMessageBox.warning(self, "Error", "Connect to target server first.")
@@ -189,15 +186,38 @@ class MainWindow(QMainWindow):
         if not files:
             return
 
+        # Get selected databases
+        selected_dbs = [
+            self.db_list.item(i).text()
+            for i in range(self.db_list.count())
+            if self.db_list.item(i).checkState() == Qt.Checked
+        ]
+
         errors = []
 
-        for file in files:
+        # 1 file + 1 DB → restore into selected DB
+        if len(files) == 1 and len(selected_dbs) == 1:
             try:
-                RestoreManager.restore_backup(self.current_server, file)
+                RestoreManager.restore_into_existing_db(
+                    self.current_server,
+                    files[0],
+                    selected_dbs[0]
+                )
             except Exception as e:
-                errors.append(f"{file}: {str(e)}")
+                errors.append(str(e))
+
+        # Otherwise → auto create DB
+        else:
+            for file in files:
+                try:
+                    RestoreManager.restore_backup(
+                        self.current_server,
+                        file
+                    )
+                except Exception as e:
+                    errors.append(f"{file}: {str(e)}")
 
         if errors:
             QMessageBox.warning(self, "Restore Completed With Errors", "\n".join(errors))
         else:
-            QMessageBox.information(self, "Restore Completed", "All backups restored successfully.")
+            QMessageBox.information(self, "Restore Completed", "Restore finished successfully.")
