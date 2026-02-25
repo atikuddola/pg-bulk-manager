@@ -25,5 +25,3 @@ class BackupManager:
 
         if result.returncode != 0:
             raise Exception(result.stderr)
-
-        return output_file

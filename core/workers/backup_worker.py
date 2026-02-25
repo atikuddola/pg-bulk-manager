@@ -21,8 +21,6 @@ class BackupWorker(QRunnable):
         self._cancelled = False
 
     def run(self):
-        output_path = os.path.join(self.output_folder, self.dbname)
-
         self.process = QProcess()
 
         env = os.environ.copy()
@@ -33,16 +31,16 @@ class BackupWorker(QRunnable):
             process_env.insert(k, v)
         self.process.setProcessEnvironment(process_env)
 
+        output_file = os.path.join(self.output_folder, f"{self.dbname}.backup")
+
         args = [
             "-h", self.server["host"],
             "-p", str(self.server["port"]),
             "-U", self.server["user"],
-            "-F", "d",          # directory format
-            "-j", "4",          # parallel jobs
+            "-F", "c",           # custom format = single .backup file
             "-d", self.dbname,
-            "-f", output_path
+            "-f", output_file
         ]
-
         self.process.start("pg_dump", args)
         self.process.waitForFinished(-1)
 
